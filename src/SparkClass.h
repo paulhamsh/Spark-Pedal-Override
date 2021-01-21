@@ -1,40 +1,40 @@
 #ifndef SparkClass_h
 #define SparkClass_h
 
-#include <M5Stack.h>
 #include <ArduinoJson.h>
 
 #define BLK_SIZE 0xad
 #define NUM_BLKS 30
 #define DATA_SIZE 0x80
 #define IN_DATA_SIZE 28
+
 #define MAX_MESSAGES 50
 
 #define STR_LEN 40
 
 typedef struct  {
-   int start_filler;
-   int preset_num;
-   char UUID[STR_LEN];
-   char Name[STR_LEN];
-   char Version[STR_LEN];
-   char Description[STR_LEN];
-   char Icon[STR_LEN];
+   int  start_filler;
+   int  preset_num;
+   char UUID[STR_LEN+1];
+   char Name[STR_LEN+1];
+   char Version[STR_LEN+1];
+   char Description[STR_LEN+1];
+   char Icon[STR_LEN+1];
    float BPM;
    struct SparkEffects {
-      char EffectName[STR_LEN];
+      char EffectName[STR_LEN+1];
       bool OnOff;
-      int NumParameters;
+      int  NumParameters;
       float Parameters[10];
    } effects[7];
    uint8_t end_filler;
 } SparkPreset;
 
 typedef struct {
-  int cmd;
-  int sub_cmd;
-  int start_pos;
-  int end_pos;
+   int cmd;
+   int sub_cmd;
+   int start_pos;
+   int end_pos;
 } MsgEntry;
 
 
@@ -56,7 +56,7 @@ class SparkClass
       void create_preset (SparkPreset& preset);
       
       // incoming from Spark      
-      void get_data();
+      int  get_data();
       void parse_data();
 
       void get_effect_parameter (int index, char *pedal, int *param, float *val);
@@ -86,19 +86,21 @@ class SparkClass
       void add_float(float flt);
       void add_onoff(const char *onoff);
 
-      bool read_string(char *str);
-      bool read_prefixed_string(char *str);
+      int  read_string(char *str);
+      int  read_prefixed_string(char *str);
       bool read_onoff();
       float read_float();
       byte read_byte();
       
-      void get_block(int block);
-          
+      int get_block(int block);
+
+      int  seq;
+      
       int  data_pos;    // logical index of the actual data - ignores the 7bit expansion in the data block
-      int chunk_offset;
-      boolean multi;
-      int cmd;
-      int sub_cmd;
+      int  chunk_offset;
+      bool multi;
+      int  cmd;
+      int  sub_cmd;
       
 };
 

@@ -1,4 +1,3 @@
-#include <M5Stack.h>
 #include <ArduinoJson.h>
 #include "SparkClass.h"
 
@@ -9,6 +8,8 @@ SparkClass::SparkClass()
 
    data_pos = -1;
    multi = false;
+
+   seq = 10;
 }
 
 SparkClass::~SparkClass()
@@ -164,6 +165,9 @@ void SparkClass::start_message(int a_cmd, int a_sub_cmd, boolean a_multi)
    last_block = 0;
    data_pos = 0;
 
+   seq++;
+   if (seq >= 255) seq = 0;
+
    memset(buf, 0, sizeof(buf));
 }
 
@@ -213,7 +217,7 @@ void SparkClass::end_message()
        // add chunk header
        buf[i][16] = 0xf0;
        buf[i][17] = 0x01;
-       buf[i][18] = 0x3a;  // sequence number - this is a random one
+       buf[i][18] = seq;  // sequence number
        buf[i][19] = 0x15;  // unknown what this is
        buf[i][20] = cmd;       
        buf[i][21] = sub_cmd;
@@ -352,17 +356,6 @@ void SparkClass::create_preset (SparkPreset &preset)
 {
    int cmd, sub_cmd;
    int i, j, siz;
-  
-   const char *Description;
-   const char *UUID;
-   const char *Name;
-   const char *Version;
-   const char *Icon;
-   float BPM;
-   float Param;
-   const char *OnOff;
-   const char *PedalName;
-   int EndFiller;
 
    cmd =     0x01;
    sub_cmd = 0x01;
@@ -414,19 +407,28 @@ void SparkClass::create_preset (SparkPreset &preset)
 // 
 // Store in the SparkClass buffer to save data copying
 
+
 int read_bt() {
-  while (!SerialBT.available()) delay(10);
-  return SerialBT.read();
+   int a;
+   while (!SerialBT.available()) delay(1);
+   a= SerialBT.read();
+/*
+if (a==0xf0) Serial.println("");
+Serial.print(" ");
+if (a<16) Serial.print("0");
+Serial.print(a, HEX);
+Serial.print(" ");
+*/  
+   return a;
 }
 
-void SparkClass::get_block(int block)
+int SparkClass::get_block(int block)
 {
    int r1, r2;
    bool started;
    int i, len; 
 
    // look for the 0x01fe start signature
-   
    started = false;
    r1 = read_bt();
    while (!started) {
@@ -434,8 +436,6 @@ void SparkClass::get_block(int block)
       if (r1==0x01 && r2 == 0xfe)
          started = true;
       else {
-Serial.print("Skipping............");
-Serial.println(r1,HEX);
          r1 = r2;
       }
    };
@@ -447,21 +447,22 @@ Serial.println(r1,HEX);
       buf[block][i] = read_bt();
 
    len = buf[block][6];
-   if (len > BLK_SIZE) {
-      Serial.print(len, HEX);
-      Serial.println(" is too big for a block, so halting");
-      while (true);
+   if (len > BLK_SIZE) { // too big for a block
+      return -1;
    };
       
-   for (i=7; i<len; i++)
+   for (i=7; i<len; i++) {
       buf[block][i] = read_bt();
+      if (buf[block][i] == 0xfe) return -2; // part of a block header in the wrong place - in fact anything >0x80 but != 0xf7 is wrong
+   }
 
   last_block = 0;
   last_pos = i-1;
+  return 0;
 }
   
 
-void SparkClass::get_data()
+int SparkClass::get_data()
 {
 
    int block;
@@ -470,20 +471,24 @@ void SparkClass::get_data()
    int blk_len; 
    int num_chunks, this_chunk;
    int seq, cmd, sub_cmd;
+   int a_cmd, a_sub_cmd;
    int directn;
 
    int pos;
+   int ret_code;
 
    block = 0;
    is_last_block = false;
 
    while (!is_last_block) {
-      if (block >= NUM_BLKS) {
-         Serial.print(block);
-         Serial.println(" BLOCKS SO FAR - THIS DATA IS TOO BIG FOR MY NUM_BLKS");
-         break;
+      if (block >= NUM_BLKS) { // too many blocks for us to store
+         return -1;
       }
-      get_block(block);
+      
+      ret_code = get_block(block);
+      if (ret_code != 0) { // get_block had a failure on this block
+         return -2;
+      }
       blk_len = buf[block][6];
       directn = buf[block][4]; // use the 0x53 or the 0x41 and ignore the second byte
       seq     = buf[block][18];
@@ -515,23 +520,34 @@ void SparkClass::get_data()
             if (this_chunk + 1 == num_chunks)
                is_last_block = true;
          }
-      if (directn == 0x41) 
+      if (directn == 0x41) {
          if (blk_len < 0x6a)
             is_last_block = true;
-         else {
+         else if (buf[block][blk_len-1] == 0xf7) {
             // this is from Spark so chunk header could be anywhere
             // so search from the end
             // there must be one within the block and it is outside the 8bit byte so the search is ok
 
             for (pos = 0x6a-2; pos >= 22 && !(buf[block][pos] == 0xf0 && buf[block][pos+1] == 0x01); pos--);
-            num_chunks = buf[block][pos+7];
-            this_chunk = buf[block][pos+8];
-            if (this_chunk + 1 == num_chunks)
+
+            a_cmd = buf[block][pos+4];
+            a_sub_cmd = buf[block][pos+5];
+
+            if (a_cmd == 0x03 && a_sub_cmd == 0x01) {
+               num_chunks = buf[block][pos+7];
+               this_chunk = buf[block][pos+8];
+               if (this_chunk + 1 == num_chunks)
+                  is_last_block = true;
+            }
+            else
                is_last_block = true;
          }
+      }
+
       last_block = block;
       block++;
    }
+   return 0;
 }
 
 #define BLK(x) (int((x)/90))
@@ -541,10 +557,8 @@ void SparkClass::parse_data() {
    int pos, start_pos, end_pos, blk_pos, num, chunk_len;
    int cmd, sub_cmd;
    bool finished;
-   char a_str[50];
 
    num_messages=0;
-      
    start_pos = 0;
    finished = false;
 
@@ -559,9 +573,7 @@ void SparkClass::parse_data() {
          num = buf[BLK(pos+7)][BLK_POS(pos+7)];
       
          pos += 39 * (num-1);
-//         blk = BLK(pos);
-//         blk_size = buf[blk][6];
-      
+     
          chunk_len = buf[BLK(pos+6+3)][BLK_POS(pos+6+3)];
          end_pos = pos + 10 + int ((chunk_len+2)/7) + chunk_len;
       }
@@ -577,6 +589,10 @@ void SparkClass::parse_data() {
       messages[num_messages].start_pos = start_pos;
       messages[num_messages].end_pos = end_pos;             
       num_messages++;
+
+      if (num_messages > MAX_MESSAGES-1) {
+         Serial.println("BUST MAX MESSAGES");
+      }
       
       if (buf[BLK(end_pos)][6] -1  == BLK_POS(end_pos)) finished = true;
       start_pos = end_pos+1;
@@ -597,18 +613,7 @@ byte SparkClass::read_byte()
 
    int blk, multi_bytes, temp_pos, slice_pos, byte_pos, bit_pos, pos, chunk, chunk_data_size;
    int bits, dat;
-/*   
-   chunk_data_size = multi ? 25: 1000; // kludge until I refactor all of this
-   chunk = int(data_pos / chunk_data_size);
-   multi_bytes = multi ? 3 : 0;
-      
-   // work out where to place the data byte and where the 8th bit should go
-   temp_pos = (data_pos % chunk_data_size) + multi_bytes;
-   slice_pos = 8 * int (temp_pos / 7);
-   byte_pos = temp_pos % 7;
-   bit_pos = scr.chunk_offset + chunk*39 + slice_pos + 6;
-   pos = scr.chunk_offset + chunk*39 + byte_pos + slice_pos + 7;
-*/      
+
 
    // work out where to place the data byte and where the 8th bit should go
    if (multi) {
@@ -632,21 +637,12 @@ byte SparkClass::read_byte()
    if (bits &  (1<<byte_pos))
       dat |= 0x80;
 
-/*   
-   Serial.print(pos);
-   Serial.print(" ");
-   Serial.print(bit_pos);
-   Serial.print(" ");
-   Serial.print(dat, HEX);
-   Serial.print(" ");
-   Serial.println(bits, BIN);  
-*/   
    data_pos++;
    return dat;
 }   
    
 
-bool SparkClass::read_string(char *str)
+int SparkClass::read_string(char *str)
 {
    int a, i, len;
 
@@ -660,7 +656,21 @@ bool SparkClass::read_string(char *str)
       len = a - 0xa0;
    }
 
-   if (len < STR_LEN) {
+   if (len > 0) {
+      for (i=0; i<len; i++) {
+         a=read_byte();
+         if (i < STR_LEN -1) str[i]=a;
+      }
+      str[i > STR_LEN-1 ? STR_LEN-1 : i]='\0';
+      return i;
+   }
+   else {
+      str[0]='\0';
+      return -1;
+   }
+}   
+/*
+   if (len < STR_LEN-1) {
       for (i=0; i<len; i++) {
          a = read_byte();
          str[i]=a;
@@ -671,8 +681,9 @@ bool SparkClass::read_string(char *str)
    else
       return -1;
 }
+*/
 
-bool SparkClass::read_prefixed_string(char *str)
+int SparkClass::read_prefixed_string(char *str)
 {
    int a, i, len;
 
@@ -680,9 +691,22 @@ bool SparkClass::read_prefixed_string(char *str)
    a=read_byte();
    
    len = a-0xa0;
-   
 
-   if (len < STR_LEN) {
+   if (len > 0) {
+      for (i=0; i<len; i++) {
+         a=read_byte();
+         if (i < STR_LEN -1) str[i]=a;
+      }
+      str[i > STR_LEN-1 ? STR_LEN-1 : i]='\0';
+      return i;
+   }
+   else {
+      str[0]='\0';
+      return -1;
+   }
+}   
+/*
+   if (len < STR_LEN-1) {
       for (i=0; i<len; i++) {
          a = read_byte();
          str[i]=a;
@@ -692,7 +716,9 @@ bool SparkClass::read_prefixed_string(char *str)
    }
    else
       return -1;
+
 }
+*/
 
 float SparkClass::read_float()
 {
@@ -760,10 +786,6 @@ void SparkClass::get_effect_change(int index, char *pedal1, char *pedal2)
 void SparkClass::get_preset(int index, SparkPreset *preset)
 {
    int i, j, start_p, end_p;
-   char a_str[STR_LEN];
-   float flt;
-   bool onoff;
-   int t;
    
    start_p = messages[index].start_pos;
    end_p = messages[index].end_pos;
