@@ -8,7 +8,7 @@
 #define DATA_SIZE 0x80
 #define IN_DATA_SIZE 28
 
-#define MAX_MESSAGES 50
+#define MAX_MESSAGES 80
 
 #define STR_LEN 40
 
@@ -56,12 +56,12 @@ class SparkClass
       void create_preset (SparkPreset& preset);
       
       // incoming from Spark      
-      int  get_data();
-      void parse_data();
+      int get_data();
+      int parse_data();
 
-      void get_effect_parameter (int index, char *pedal, int *param, float *val);
-      void get_effect_change(int index, char *pedal1, char *pedal2);
-      void get_preset(int index, SparkPreset *preset);
+      int get_effect_parameter (int index, char *pedal, int *param, float *val);
+      int get_effect_change(int index, char *pedal1, char *pedal2);
+      int get_preset(int index, SparkPreset *preset);
       void start_reading(int start, bool a_multi);
 
       // general

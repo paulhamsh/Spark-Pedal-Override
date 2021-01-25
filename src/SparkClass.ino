@@ -92,7 +92,7 @@ void SparkClass::add_prefixed_string(const char *str)
 {
    int len, i;
 
-   len = strlen(str);
+   len = strnlen(str, STR_LEN-1);
    add_byte(byte(len));
    add_byte(byte(len + 0xa0));
    for (i=0; i<len; i++)
@@ -103,7 +103,7 @@ void SparkClass::add_string(const char *str)
 {
    int len, i;
 
-   len = strlen(str);
+   len = strnlen(str, STR_LEN-1);
    add_byte(byte(len + 0xa0));
    for (i=0; i<len; i++)
       add_byte(byte(str[i]));
@@ -113,7 +113,7 @@ void SparkClass::add_long_string(const char *str)
 {
    int len, i;
 
-   len = strlen(str);
+   len = strnlen(str, STR_LEN-1);
    add_byte(byte(0xd9));
    add_byte(byte(len));
    for (i=0; i<len; i++)
@@ -142,7 +142,7 @@ void SparkClass::add_onoff (const char *onoff)
 {
    byte b;
 
-   if (strcmp(onoff, "On")==0)
+   if (strncmp(onoff, "On", STR_LEN-1)==0)
       b = 0xc3;
    else
       b = 0xc2;
@@ -317,7 +317,7 @@ void SparkClass::create_preset_json (const char *a_preset)
    add_long_string (UUID);
    add_string (Name);
    add_string (Version);
-   if (strlen (Description) > 31)
+   if (strnlen (Description, STR_LEN-1) > 31)
       add_long_string (Description);
    else
       add_string (Description);
@@ -366,7 +366,7 @@ void SparkClass::create_preset (SparkPreset &preset)
    add_long_string (preset.UUID);
    add_string (preset.Name);
    add_string (preset.Version);
-   if (strlen (preset.Description) > 31)
+   if (strnlen (preset.Description, STR_LEN-1) > 31)
       add_long_string (preset.Description);
    else
       add_string (preset.Description);
@@ -407,18 +407,31 @@ void SparkClass::create_preset (SparkPreset &preset)
 // 
 // Store in the SparkClass buffer to save data copying
 
+// Error codes:
+
+// -1  timeout reading serial BT
+// -11 block length reported is too large for a block
+// -12  got 0xfe in a chunk
+// -21 too many blocks for the buffers
+// -22 first chunk in a block does not have a chunk header (0xf001)
+// -31 parsing data part reasonable end of data
+// -32 more than maximum number of messages in buffer
+// -41 bad string being read
+// -42 bad float being read
+// -51 bad string being parsed
+// -52 bad float being parsed
 
 int read_bt() {
    int a;
-   while (!SerialBT.available()) delay(1);
+   unsigned long mi;
+
+   mi = millis();
+   while (!SerialBT.available()) {
+      if ((millis() - mi) > 500) return -1;
+      delay(5);
+   }
+
    a= SerialBT.read();
-/*
-if (a==0xf0) Serial.println("");
-Serial.print(" ");
-if (a<16) Serial.print("0");
-Serial.print(a, HEX);
-Serial.print(" ");
-*/  
    return a;
 }
 
@@ -427,12 +440,15 @@ int SparkClass::get_block(int block)
    int r1, r2;
    bool started;
    int i, len; 
+   int j, val;
 
    // look for the 0x01fe start signature
    started = false;
    r1 = read_bt();
+   if (r1<0) return r1;
    while (!started) {
       r2 = read_bt();
+      if (r2 < 0) return r2;
       if (r1==0x01 && r2 == 0xfe)
          started = true;
       else {
@@ -443,17 +459,29 @@ int SparkClass::get_block(int block)
    buf[block][0]=r1;
    buf[block][1]=r2;
    // we have found the start signature so read up until the length byte
-   for (i=2; i<7; i++)
-      buf[block][i] = read_bt();
-
+   for (i=2; i<7; i++) {
+      val = read_bt();
+      if (val < 0)
+        return val;
+      else
+         buf[block][i] = val;
+   }
+  
    len = buf[block][6];
    if (len > BLK_SIZE) { // too big for a block
-      return -1;
+      return -11;
    };
       
    for (i=7; i<len; i++) {
-      buf[block][i] = read_bt();
-      if (buf[block][i] == 0xfe) return -2; // part of a block header in the wrong place - in fact anything >0x80 but != 0xf7 is wrong
+      val = read_bt();
+      if (val < 0) return val;
+      else if (val == 0xfe) {
+         // got strange value so flush the buffer and return an error
+         while (SerialBT.available()) SerialBT.read();
+         return -12; // part of a block header in the wrong place - in fact anything >0x80 but != 0xf7 is wrong
+      }
+      else
+         buf[block][i] = val;
    }
 
   last_block = 0;
@@ -467,6 +495,7 @@ int SparkClass::get_data()
 
    int block;
    bool is_last_block;
+   int sig_1, sig_2;
 
    int blk_len; 
    int num_chunks, this_chunk;
@@ -482,23 +511,32 @@ int SparkClass::get_data()
 
    while (!is_last_block) {
       if (block >= NUM_BLKS) { // too many blocks for us to store
-         return -1;
+         return -21;
       }
       
       ret_code = get_block(block);
       if (ret_code != 0) { // get_block had a failure on this block
-         return -2;
+         return ret_code;
       }
+
+
       blk_len = buf[block][6];
       directn = buf[block][4]; // use the 0x53 or the 0x41 and ignore the second byte
+      sig_1   = buf[block][16];
+      sig_2   = buf[block][17];
       seq     = buf[block][18];
       cmd     = buf[block][20];
       sub_cmd = buf[block][21];
-
- 
+                
+      if ((block == 0) && !(sig_1 == 0xf0 && sig_2 == 0x01)) {
+         // require the first part of a new block to have the chunk signature
+         // in case it is a continuation of a bad block
+         return -22;
+      }
+      
       if (directn == 0x53 && cmd == 0x01 && sub_cmd != 0x04)
-          // the app sent a message that needs a response
-          send_ack(seq, cmd);
+         // the app sent a message that needs a response
+         send_ack(seq, cmd);
             
       //now we need to see if this is the last block
 
@@ -553,7 +591,7 @@ int SparkClass::get_data()
 #define BLK(x) (int((x)/90))
 #define BLK_POS(x) (16 + (x)%90)
 
-void SparkClass::parse_data() {
+int SparkClass::parse_data() {
    int pos, start_pos, end_pos, blk_pos, num, chunk_len;
    int cmd, sub_cmd;
    bool finished;
@@ -581,7 +619,10 @@ void SparkClass::parse_data() {
        // search for the 0xf7
          pos = start_pos+6;
 
-         while (buf[BLK(pos)][BLK_POS(pos)] != 0xf7) pos++;
+         while (buf[BLK(pos)][BLK_POS(pos)] != 0xf7) {
+            pos++;
+            if (pos > (last_block+1) * BLK_SIZE) return -31;
+         }
          end_pos = pos;
       }
       messages[num_messages].cmd = cmd;
@@ -591,7 +632,8 @@ void SparkClass::parse_data() {
       num_messages++;
 
       if (num_messages > MAX_MESSAGES-1) {
-         Serial.println("BUST MAX MESSAGES");
+         // broken max number of messages in buffer
+         return -32;
       }
       
       if (buf[BLK(end_pos)][6] -1  == BLK_POS(end_pos)) finished = true;
@@ -647,16 +689,24 @@ int SparkClass::read_string(char *str)
    int a, i, len;
 
    a=read_byte();
-   if (a == 0xd9) 
+   if (a == 0xd9) {
       len = read_byte();
-   else if (a > 0xa0)
+      // 0x40 is not specific but seems large enough
+      // and should have higher faith give the 0xd9      
+      if (a > 0x40) return -41;  
+   }
+   else if (a > 0xa0) {
+      if (a < 0xa1 || a >= 0xc0) return -41;
       len = a - 0xa0;
+   }
    else {
       a=read_byte();
+      if (a < 0xa1 || a >= 0xc0) return -41;
       len = a - 0xa0;
    }
 
    if (len > 0) {
+      // process whole string but cap it at STR_LEN-1
       for (i=0; i<len; i++) {
          a=read_byte();
          if (i < STR_LEN -1) str[i]=a;
@@ -669,19 +719,7 @@ int SparkClass::read_string(char *str)
       return -1;
    }
 }   
-/*
-   if (len < STR_LEN-1) {
-      for (i=0; i<len; i++) {
-         a = read_byte();
-         str[i]=a;
-      }
-      str[i] = '\0';
-      return true;
-   }
-   else
-      return -1;
-}
-*/
+
 
 int SparkClass::read_prefixed_string(char *str)
 {
@@ -689,7 +727,8 @@ int SparkClass::read_prefixed_string(char *str)
 
    a=read_byte(); 
    a=read_byte();
-   
+
+   if (a < 0xa1 || a >= 0xc0) return -41;
    len = a-0xa0;
 
    if (len > 0) {
@@ -705,20 +744,7 @@ int SparkClass::read_prefixed_string(char *str)
       return -1;
    }
 }   
-/*
-   if (len < STR_LEN-1) {
-      for (i=0; i<len; i++) {
-         a = read_byte();
-         str[i]=a;
-      }
-      str[i] = '\0';
-      return true;
-   }
-   else
-      return -1;
 
-}
-*/
 
 float SparkClass::read_float()
 {
@@ -729,6 +755,7 @@ float SparkClass::read_float()
    int a, i;
 
    a = read_byte();  // should be 0xca
+   if (a != 0xca) return -42.0;
   
    // Seems this creates the most significant byte in the last position, so for example
    // 120.0 = 0x42F00000 is stored as 0000F042  
@@ -756,36 +783,48 @@ bool SparkClass::read_onoff()
 // The functions to get the messages
 
 
-void SparkClass::get_effect_parameter (int index, char *pedal, int *param, float *val)
+int SparkClass::get_effect_parameter (int index, char *pedal, int *param, float *val)
 {
    int i, start_p, end_p;
+   int ret;
    
    start_p = messages[index].start_pos;
    end_p = messages[index].end_pos;
 
    start_reading(start_p, false);
 
-   read_string(pedal);
+   ret = read_string(pedal);
+   if (ret < 0) return -51;
    *param = read_byte();
    *val = read_float();
+   if (*val < 0.0) return -52;
+   
+   return 0;
 }
 
-void SparkClass::get_effect_change(int index, char *pedal1, char *pedal2)
+int SparkClass::get_effect_change(int index, char *pedal1, char *pedal2)
 {
    int i, start_p, end_p;
+   int ret;
    
    start_p = messages[index].start_pos;
    end_p = messages[index].end_pos;
 
    start_reading(start_p, false);
 
-   read_string(pedal1);
-   read_string(pedal2);
+   ret = read_string(pedal1);
+   if (ret <0) return -51;
+   ret = read_string(pedal2);
+   if (ret <0) return -51;
+   
+   return 0;
 }
 
-void SparkClass::get_preset(int index, SparkPreset *preset)
+int SparkClass::get_preset(int index, SparkPreset *preset)
 {
    int i, j, start_p, end_p;
+   int num;
+   int ret;
    
    start_p = messages[index].start_pos;
    end_p = messages[index].end_pos;
@@ -794,21 +833,32 @@ void SparkClass::get_preset(int index, SparkPreset *preset)
 
    read_byte();
    preset->preset_num = read_byte();
-   read_string(preset->UUID); 
-   read_string(preset->Name);
-   read_string(preset->Version);
-   read_string(preset->Description);
-   read_string(preset->Icon);
+   ret = read_string(preset->UUID); 
+   if (ret <0) return -51;
+   ret = read_string(preset->Name);
+   if (ret <0) return -51;
+   ret = read_string(preset->Version);
+   if (ret <0) return -51;
+   ret = read_string(preset->Description);
+   if (ret <0) return -51;
+   ret = read_string(preset->Icon);
+   if (ret <0) return -51;
+      
    preset->BPM = read_float();
+ 
 
    for (j=0; j<7; j++) {
-      read_string(preset->effects[j].EffectName);
-      preset->effects[j].OnOff = read_onoff();   
-      preset->effects[j].NumParameters = read_byte()- 0x90;
+      ret = read_string(preset->effects[j].EffectName);
+      if (ret <0) return -51;
+      preset->effects[j].OnOff = read_onoff();
+      num = read_byte();
+      if (num <= 0x90 || num >= 0xa0) return -55;
+      preset->effects[j].NumParameters = num - 0x90;
       for (i=0; i<preset->effects[j].NumParameters; i++) {
          read_byte();
          read_byte();
          preset->effects[j].Parameters[i] = read_float();
       }
    }
+   return 0;
 }
