@@ -1,6 +1,5 @@
 #include <M5Core2.h>
-
-//#include <ArduinoJson.h>
+#include <ArduinoJson.h>
 #include "SparkClass.h"
 #include "SparkPresets.h"
 
@@ -25,7 +24,7 @@ BluetoothSerial SerialBT;
 
 
 // Spark vars
-SparkClass sc1, sc2, sc3, sc4, scr;
+SparkClass sc1, sc2, sc3, sc4, scr, scrp;
 SparkClass sc_setpreset7f;
 
 SparkPreset preset;
@@ -35,9 +34,7 @@ SparkPreset preset;
 // Display routintes
 
 // Display vars
-
 #define DISP_LEN 50
-
 char outstr[DISP_LEN+1];
 char instr[DISP_LEN+1];
 char statstr[DISP_LEN+1];
@@ -89,37 +86,59 @@ void display_val(float val)
    int dist;
 
    dist = int(val * 290);
-   M5.Lcd.fillRoundRect(15, IN + STD_HEIGHT + 10 , 290, 15, 4, BACKGROUND);
+   M5.Lcd.fillRoundRect(15 + dist, IN + STD_HEIGHT + 10 , 290 - dist, 15, 4, BACKGROUND);
    M5.Lcd.drawRoundRect(15, IN + STD_HEIGHT + 10 , 290 , 15, 4, TEXT_COLOUR);
    M5.Lcd.fillRoundRect(15, IN + STD_HEIGHT + 10 , dist, 15, 4, TEXT_COLOUR);
 }
 
-void display_str(const char *d_str, int y)
+void display_str(const char *a_str, int y)
 {
-   char dis_str[DISP_LEN+1];
+   char b_str[30];
 
-   strncpy(dis_str, d_str, 25);
-   if (strlen(d_str) < 25) strncat(dis_str, "                         ", 25-strlen(d_str));
+   strncpy(b_str, a_str, 25);
+   if (strlen(a_str) < 25) strncat(b_str, "                         ", 25-strlen(a_str));
    M5.Lcd.setCursor(8,y+8);
-   M5.Lcd.print(dis_str);
+   M5.Lcd.print(b_str);
 }
 
 
 
 // ------------------------------------------------------------------------------------------
 // Bluetooth routines
-  
-void connect_to_spark() {
-   bool connected = false;
-   int rec;
+
+bool connected;
+int bt_event;
+
+void btEventCallback(esp_spp_cb_event_t event, esp_spp_cb_param_t *param){
+  // On BT connection close
+  if (event == ESP_SPP_CLOSE_EVT ){
+    // TODO: Until the cause of connection instability (compared to Pi version) over long durations 
+    // is resolved, this should keep your pedal and amp connected fairly well by forcing reconnection
+    // in the main loop
+    connected = false;
+  }
+  if (event != ESP_SPP_CLOSE_EVT ) {
+     bt_event = event;
+  }
+}
+
+void start_bt() {
+   SerialBT.register_callback(btEventCallback);
    
    if (!SerialBT.begin (MY_NAME, true)) {
       display_str("Bluetooth init fail", STATUS);
       while (true);
-   }
-   
-   display_str("Connecting to Spark", STATUS);
+   }    
+   connected = false;
+   bt_event = 0;
+}
+
+
+void connect_to_spark() {
+   int rec;
+
    while (!connected) {
+      display_str("Connecting to Spark", STATUS);
       connected = SerialBT.connect(SPARK_NAME);
       if (connected && SerialBT.hasClient()) {
          display_str("Connected to Spark", STATUS);
@@ -135,6 +154,7 @@ void connect_to_spark() {
       rec = SerialBT.read(); 
 }
 
+// ----------------------------------------------------------------------------------------
 // Send messages to the Spark (and receive an acknowledgement where appropriate
 
 void send_bt(SparkClass& spark_class)
@@ -144,6 +164,7 @@ void send_bt(SparkClass& spark_class)
    // if multiple blocks then send all but the last - the for loop should only run if last_block > 0
    for (i = 0; i < spark_class.last_block; i++) {
       SerialBT.write(spark_class.buf[i], BLK_SIZE);
+ 
    }
       
    // and send the last one      
@@ -152,7 +173,7 @@ void send_bt(SparkClass& spark_class)
 }
 
 
-// Helper functions to send an acknoweledgement and to send a request for a preset
+// Helper functions to send an acknoweledgement and to send a requesjames luit for a preset
 
 void send_ack(int seq, int cmd)
 {
@@ -191,7 +212,7 @@ void send_receive_bt(SparkClass& spark_class)
       SerialBT.write(spark_class.buf[i], BLK_SIZE);
       // read the ACK
       rec = scr.get_data();
-      if (rec == -1) Serial.println("WAITING FOR ACK, GOT AN ERROR"); 
+      if (rec <0) Serial.println("WAITING FOR ACK, GOT AN ERROR"); 
    }
       
    // and send the last one      
@@ -199,8 +220,7 @@ void send_receive_bt(SparkClass& spark_class)
    
    // read the ACK
       rec = scr.get_data();
-      if (rec == -1) Serial.println("WAITING FOR ACK, GOT AN ERROR"); 
-
+      if (rec <0) Serial.println("WAITING FOR ACK, GOT AN ERROR"); 
 }
 
 
@@ -215,8 +235,11 @@ char b_str[STR_LEN+1];
 int param;
 float val;
 
+
 void setup() {
    M5.begin();
+
+//   M5.Power.setPowerBoostKeepOn(true);
    M5.Lcd.fillScreen(BACKGROUND);
    do_backgrounds();
 
@@ -224,6 +247,7 @@ void setup() {
    display_str("Nothing out",  OUT);
    display_str("Nothing in",   IN);
 
+   start_bt();
    connect_to_spark();
 
    // set up the change to 7f message for when we send a full preset
@@ -231,74 +255,97 @@ void setup() {
 }
 
 void loop() {
-  
-//   display_bar();
-
-
-   if (!SerialBT.hasClient()) {
-      display_str("Lost connection",      STATUS);
-      while (true);
+   int av;
+   int ret;
+   int ct;
+   
+   display_bar();
+   
+/*
+   if (M5.BtnA.wasReleased()) {
+      if (connected)
+         display_str("Connected still", IN);
+      else
+         display_str("No longer connected", IN);      
    }
 
+   if (M5.BtnB.wasReleased()) {
+      connected = false;
+   }
+
+   if (!SerialBT.hasClient()) {
+      display_str("Lost connection", STATUS);
+      while (true);
+   }
+*/
+   
+   // this will connect if not already connected
+   if (!connected) connect_to_spark();
+
+   if (bt_event != 0) {
+      snprintf(statstr, DISP_LEN-1,"BT Event: %d", bt_event);
+      display_str(statstr, STATUS);
+      bt_event = 0;
+   }
    delay(10);
+   
    if (SerialBT.available()) {
-      if (scr.get_data() != -1) {
-         scr.parse_data();
-    
+      if (scr.get_data() >= 0 && scr.parse_data() >=0) {
          for (i=0; i<scr.num_messages; i++) {
             cmd = scr.messages[i].cmd;
             sub_cmd = scr.messages[i].sub_cmd;
-//            snprintf(instr, DISP_LEN-1, "Cmd %2.2X %2.2X %2.2X %4.4X %4.4X", i, scr.messages[i].cmd, scr.messages[i].sub_cmd, scr.messages[i].start_pos, scr.messages[i].end_pos);
-//            display_str(instr, IN);
 
-     
-//could be this
             if (cmd == 0x03 && sub_cmd == 0x01) {
-               scr.get_preset(i, &preset);
-               snprintf(instr, DISP_LEN-1, "Preset: %s", preset.Name);
-               display_str(instr, IN);
+               ret = scr.get_preset(i, &preset);
+               Serial.println("Get preset");
+               Serial.println(ret);
+               if (ret >= 0){
+                  snprintf(instr, DISP_LEN-1, "Preset: %s", preset.Name);
+                  display_str(instr, IN);
+               }
             }
             else if (cmd == 0x03 && sub_cmd == 0x37) {
-               scr.get_effect_parameter(i, a_str, &param, &val);
-               snprintf(instr, DISP_LEN-1, "%s %d %0.2f", a_str, param, val);
-               display_str(instr, IN);  
-               display_val(val);
+               ret = scr.get_effect_parameter(i, a_str, &param, &val);
+               Serial.println("Get effect params");
+               Serial.println(ret);
+               if (ret >=0) {
+                  snprintf(instr, DISP_LEN-1, "%s %d %0.2f", a_str, param, val);
+                  display_str(instr, IN);  
+                  display_val(val);
+               }
             }
-//could be this            
             else if (cmd == 0x03 && sub_cmd == 0x06) {
                // it can only be an amp change if received from the Spark
-               scr.get_effect_change(i, a_str, b_str);
+               ret = scr.get_effect_change(i, a_str, b_str);
+               Serial.println("Get effect change");
+               Serial.println(ret);
+               if (ret >= 0) {
             
-               snprintf(instr, DISP_LEN-1, "-> %s", b_str);
-               display_str(instr, IN);
+                  snprintf(instr, DISP_LEN-1, "-> %s", b_str);
+                  display_str(instr, IN);
             
-//               for (p=0; p<5;p++) {
-//                  sc2.change_effect_parameter(b_str, p, 0.1);
-//                  send_bt(sc2);
-//               }
-            
-               if      (!strcmp(b_str, "FatAcousticV2")) pres = 16;
-               else if (!strcmp(b_str, "GK800")) pres = 17;
-               else if (!strcmp(b_str, "Twin")) pres = 3;
-               else if (!strcmp(b_str, "TwoStoneSP50")) pres = 12;
-               else if (!strcmp(b_str, "OverDrivenJM45")) pres = 5; 
-               else if (!strcmp(b_str, "AmericanHighGain")) pres = 22;
-               else if (!strcmp(b_str, "EVH")) pres = 7;
+                  if      (!strncmp(b_str, "FatAcousticV2", STR_LEN-1)) pres = 16;
+                  else if (!strncmp(b_str, "GK800", STR_LEN-1)) pres = 17;
+                  else if (!strncmp(b_str, "Twin", STR_LEN-1)) pres = 3;
+                  else if (!strncmp(b_str, "TwoStoneSP50", STR_LEN-1)) pres = 12;
+                  else if (!strncmp(b_str, "OverDrivenJM45", STR_LEN-1)) pres = 5; 
+                  else if (!strncmp(b_str, "AmericanHighGain", STR_LEN-1)) pres = 22;
+                  else if (!strncmp(b_str, "EVH", STR_LEN-1)) pres = 7;
                                                
-               sc2.create_preset(*presets[pres]);
-               send_receive_bt(sc2);
-               send_receive_bt(sc_setpreset7f);
+                  sc2.create_preset(*presets[pres]);
+                  send_receive_bt(sc2);
+                  send_receive_bt(sc_setpreset7f);
 
-               snprintf(outstr, DISP_LEN-1, "Preset: %s", presets[pres]->Name);
-               display_str(outstr, OUT);
+                  snprintf(outstr, DISP_LEN-1, "Preset: %s", presets[pres]->Name);
+                  display_str(outstr, OUT);
 
-//              send_preset_request(0x7f);
+//                  send_preset_request(0x7f);
+               }
             }
-            else {
+//            else {
 //               snprintf(instr, DISP_LEN-1, "Command %2X %2X", scr.messages[i].cmd, scr.messages[i].sub_cmd);
 //               display_str(instr, IN);
-
-            }
+//            }
          }
       }
    }
