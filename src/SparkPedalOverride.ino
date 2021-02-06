@@ -28,7 +28,7 @@ SparkClass sc1, sc2, sc3, sc4, scr, scrp;
 SparkClass sc_setpreset7f;
 
 SparkPreset preset;
-
+SparkClass sc_getserial;
 
 // ------------------------------------------------------------------------------------------
 // Display routintes
@@ -212,7 +212,10 @@ void send_receive_bt(SparkClass& spark_class)
       SerialBT.write(spark_class.buf[i], BLK_SIZE);
       // read the ACK
       rec = scr.get_data();
-      if (rec <0) Serial.println("WAITING FOR ACK, GOT AN ERROR"); 
+      if (rec <0) {
+         Serial.print("Receive error "); 
+         Serial.println(rec);
+      }
    }
       
    // and send the last one      
@@ -220,7 +223,10 @@ void send_receive_bt(SparkClass& spark_class)
    
    // read the ACK
       rec = scr.get_data();
-      if (rec <0) Serial.println("WAITING FOR ACK, GOT AN ERROR"); 
+      if (rec <0) {
+         Serial.print("Receive error "); 
+         Serial.println(rec);
+      } 
 }
 
 
@@ -235,6 +241,7 @@ char b_str[STR_LEN+1];
 int param;
 float val;
 
+unsigned long keep_alive;
 
 void setup() {
    M5.begin();
@@ -250,8 +257,11 @@ void setup() {
    start_bt();
    connect_to_spark();
 
+   keep_alive = millis();
+   
    // set up the change to 7f message for when we send a full preset
    sc_setpreset7f.change_hardware_preset(0x7f);
+   sc_getserial.get_serial();
 }
 
 void loop() {
@@ -283,14 +293,23 @@ void loop() {
    // this will connect if not already connected
    if (!connected) connect_to_spark();
 
-   if (bt_event != 0) {
-      snprintf(statstr, DISP_LEN-1,"BT Event: %d", bt_event);
-      display_str(statstr, STATUS);
-      bt_event = 0;
+   // see if this keeps the connection alive
+   if (millis() - keep_alive  > 10000) {
+      keep_alive = millis();
+      send_receive_bt(sc_getserial);
    }
+   
+//   if (bt_event != 0) {
+//      snprintf(statstr, DISP_LEN-1,"BT Event: %d", bt_event);
+//      display_str(statstr, STATUS);
+//      bt_event = 0;
+//   }
    delay(10);
    
    if (SerialBT.available()) {
+      // reset timeout
+      keep_alive = millis();
+      
       if (scr.get_data() >= 0 && scr.parse_data() >=0) {
          for (i=0; i<scr.num_messages; i++) {
             cmd = scr.messages[i].cmd;
@@ -298,7 +317,7 @@ void loop() {
 
             if (cmd == 0x03 && sub_cmd == 0x01) {
                ret = scr.get_preset(i, &preset);
-               Serial.println("Get preset");
+               Serial.print("Get preset ");
                Serial.println(ret);
                if (ret >= 0){
                   snprintf(instr, DISP_LEN-1, "Preset: %s", preset.Name);
@@ -307,7 +326,7 @@ void loop() {
             }
             else if (cmd == 0x03 && sub_cmd == 0x37) {
                ret = scr.get_effect_parameter(i, a_str, &param, &val);
-               Serial.println("Get effect params");
+               Serial.print("Get effect params ");
                Serial.println(ret);
                if (ret >=0) {
                   snprintf(instr, DISP_LEN-1, "%s %d %0.2f", a_str, param, val);
@@ -318,7 +337,7 @@ void loop() {
             else if (cmd == 0x03 && sub_cmd == 0x06) {
                // it can only be an amp change if received from the Spark
                ret = scr.get_effect_change(i, a_str, b_str);
-               Serial.println("Get effect change");
+               Serial.print("Get effect change ");
                Serial.println(ret);
                if (ret >= 0) {
             
