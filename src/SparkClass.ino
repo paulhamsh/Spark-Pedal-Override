@@ -161,7 +161,7 @@ void SparkClass::start_message(int a_cmd, int a_sub_cmd, boolean a_multi)
    sub_cmd = a_sub_cmd;
    multi = a_multi;
    
-   last_pos = 0;
+   last_pos = 21;
    last_block = 0;
    data_pos = 0;
 
@@ -227,11 +227,11 @@ void SparkClass::end_message()
 
 void SparkClass::change_effect_parameter (char *pedal, int param, float val)
 {
-   int cmd, sub_cmd;
-   cmd = 0x01;
-   sub_cmd = 0x04;
+   int a_cmd, a_sub_cmd;
+   a_cmd = 0x01;
+   a_sub_cmd = 0x04;
     
-   start_message (cmd, sub_cmd, false);
+   start_message (a_cmd, a_sub_cmd, false);
    add_prefixed_string (pedal);
    add_byte (byte(param));
    add_float(val);
@@ -241,11 +241,11 @@ void SparkClass::change_effect_parameter (char *pedal, int param, float val)
 
 void SparkClass::change_effect (char *pedal1, char *pedal2)
 {
-   int cmd, sub_cmd;
-   cmd = 0x01;
-   sub_cmd = 0x06;
+   int a_cmd, a_sub_cmd;
+   a_cmd = 0x01;
+   a_sub_cmd = 0x06;
 
-   start_message (cmd, sub_cmd, false);
+   start_message (a_cmd, a_sub_cmd, false);
    add_prefixed_string (pedal1);
    add_prefixed_string (pedal2);
    end_message();
@@ -254,12 +254,12 @@ void SparkClass::change_effect (char *pedal1, char *pedal2)
 void SparkClass::change_hardware_preset (int preset_num)
 {
    // preset_num is 0 to 3
-   int cmd, sub_cmd;
+   int a_cmd, a_sub_cmd;
     
-   cmd = 0x01;
-   sub_cmd = 0x38;
+   a_cmd = 0x01;
+   a_sub_cmd = 0x38;
 
-   start_message (cmd, sub_cmd, false);
+   start_message (a_cmd, a_sub_cmd, false);
    add_byte (byte(0));
    add_byte (byte(preset_num))  ;     
    end_message();  
@@ -267,18 +267,26 @@ void SparkClass::change_hardware_preset (int preset_num)
 
 void SparkClass::turn_effect_onoff (char *pedal, char *onoff)
 {
-   int cmd;
+   int a_cmd, a_sub_cmd;
    
-   cmd = 0x01;
-   sub_cmd = 0x15;
+   a_cmd = 0x01;
+   a_sub_cmd = 0x15;
 
-   start_message (cmd, sub_cmd, false);
+   start_message (a_cmd, a_sub_cmd, false);
    add_prefixed_string (pedal);
    add_onoff (onoff);
    end_message();
 }
 
-
+void SparkClass::get_serial()
+{
+   int a_cmd, a_sub_cmd;
+   a_cmd = 0x02;
+   a_sub_cmd = 0x23;
+    
+   start_message (a_cmd, a_sub_cmd, false);
+   end_message();  
+}
 
 void SparkClass::create_preset_json (const char *a_preset)
 {

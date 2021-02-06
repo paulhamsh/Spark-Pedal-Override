@@ -54,7 +54,8 @@ class SparkClass
       void change_effect (char *pedal1,  char *pedal2);
       void create_preset_json (const char *a_preset);
       void create_preset (SparkPreset& preset);
-      
+      void get_serial();
+            
       // incoming from Spark      
       int get_data();
       int parse_data();
