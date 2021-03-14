@@ -701,7 +701,7 @@ int SparkClass::read_string(char *str)
       len = read_byte();
       // 0x40 is not specific but seems large enough
       // and should have higher faith give the 0xd9      
-      if (a > 0x40) return -41;  
+      if (len > 0x40) return -41;   
    }
    else if (a > 0xa0) {
       if (a < 0xa1 || a >= 0xc0) return -41;
